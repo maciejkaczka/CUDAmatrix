@@ -1,0 +1,254 @@
+#include <iostream>
+#include <cuComplex.h>
+#include <iomanip>
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <chrono>
+
+using namespace std;
+
+__global__ void mulMatGPU(cuDoubleComplex *A, cuDoubleComplex *B, cuDoubleComplex *X, int sizeDim)
+{
+	int col = blockIdx.x * blockDim.x + threadIdx.x;
+	int row = blockIdx.y * blockDim.y + threadIdx.y;
+	
+	X[row * sizeDim + col] = make_cuDoubleComplex(0, 0);
+	if (col < sizeDim && row < sizeDim) {
+		for (int i = 0; i < sizeDim; i++) {
+			X[row * sizeDim + col] = cuCadd(X[row * sizeDim + col], cuCmul(A[row * sizeDim + i], B[i * sizeDim + col]));
+		}
+	}
+}
+
+__global__ void addMatGPU(cuDoubleComplex* A, cuDoubleComplex* X, int sizeDim)
+{
+	int col = blockIdx.x * blockDim.x + threadIdx.x;
+	int row = blockIdx.y * blockDim.y + threadIdx.y;
+	if (col < sizeDim && row < sizeDim) {
+		X[row * sizeDim + col] = cuCadd(X[row * sizeDim + col], A[row * sizeDim + col]);
+	}
+}
+
+
+__global__ void tranMatGPU(cuDoubleComplex* A, cuDoubleComplex* Z, int sizeDim)
+{
+	int col = blockIdx.x * blockDim.x + threadIdx.x;
+	int row = blockIdx.y * blockDim.y + threadIdx.y;
+	if (col < sizeDim && row < sizeDim) {
+		Z[row * sizeDim + col] = A[col * sizeDim + row];
+	}
+}
+
+__global__ void mulCMatGPU(cuDoubleComplex* Z, int u, int sizeDim)
+{
+	int col = blockIdx.x * blockDim.x + threadIdx.x;
+	int row = blockIdx.y * blockDim.y + threadIdx.y;
+	cuDoubleComplex uC = make_cuDoubleComplex(u, 0);
+	if (col < sizeDim && row < sizeDim) {
+		Z[row * sizeDim + col] = cuCmul(Z[row * sizeDim + col], uC);
+	}
+}
+
+
+__global__ void subMatGPU(cuDoubleComplex* X, cuDoubleComplex* Z, int sizeDim)
+{
+	int col = blockIdx.x * blockDim.x + threadIdx.x;
+	int row = blockIdx.y * blockDim.y + threadIdx.y;
+	if (col < sizeDim && row < sizeDim) {
+		X[row * sizeDim + col] = cuCsub(X[row * sizeDim + col], Z[row * sizeDim + col]);
+	}
+}
+
+void defMat(int sizeDim, cuDoubleComplex A[], cuDoubleComplex B[]) {
+	double a, b, c, d;
+	for(int i = 0; i < sizeDim; i++){
+		for(int j = 0; j < sizeDim; j++){
+			a = -10 + ((double)rand() / RAND_MAX) * 21;
+			b = -10 + ((double)rand() / RAND_MAX) * 21;
+			c = -10 + ((double)rand() / RAND_MAX) * 21;
+			d = -10 + ((double)rand() / RAND_MAX) * 21;
+			A[i* sizeDim + j] = make_cuDoubleComplex(a, b);
+			B[i* sizeDim + j] = make_cuDoubleComplex(c, d);
+		}
+	}
+}
+
+
+cuDoubleComplex* addMat(int sizeDim, cuDoubleComplex A[], cuDoubleComplex B[]) {
+	int matSize = sizeDim * sizeDim;
+	cuDoubleComplex* X = new cuDoubleComplex[matSize];
+	for (int i = 0; i < sizeDim; i++) {
+		for (int j = 0; j < sizeDim; j++) {
+			X[i* sizeDim + j] = cuCadd(A[i* sizeDim + j], B[i* sizeDim + j]);
+		}
+	}
+
+	return X;
+}
+
+
+cuDoubleComplex* mulMat(int sizeDim, cuDoubleComplex A[], cuDoubleComplex B[]) {
+	int matSize = sizeDim * sizeDim;
+	cuDoubleComplex* X = new cuDoubleComplex[matSize];
+	for (int i = 0; i < sizeDim; i++) {
+		for (int j = 0; j < sizeDim; j++) {
+			X[i * sizeDim + j] = make_cuDoubleComplex(0, 0);
+			for (int k = 0; k < sizeDim; k++) {
+				X[i * sizeDim + j] = cuCadd(X[i * sizeDim + j], cuCmul(A[i * sizeDim + k], B[k * sizeDim + j]));
+			}
+			
+		}
+	}
+
+	return X;
+}
+
+cuDoubleComplex* tranMat(int sizeDim, cuDoubleComplex A[]) {
+	int matSize = sizeDim * sizeDim;
+	cuDoubleComplex* X = new cuDoubleComplex[matSize];
+	for (int i = 0; i < sizeDim; i++) {
+		for (int j = 0; j < sizeDim; j++) {
+			X[i * sizeDim + j] = A[j * sizeDim + i];
+		}
+	}
+
+	return X;
+}
+
+cuDoubleComplex* subMat(int sizeDim, cuDoubleComplex A[], cuDoubleComplex B[]) {
+	int matSize = sizeDim * sizeDim;
+	cuDoubleComplex* X = new cuDoubleComplex[matSize];
+	for (int i = 0; i < sizeDim; i++) {
+		for (int j = 0; j < sizeDim; j++) {
+			X[i * sizeDim + j] = cuCsub(A[i * sizeDim + j], B[i * sizeDim + j]);
+		}
+	}
+
+	return X;
+}
+
+cuDoubleComplex* mulcMat(int sizeDim, cuDoubleComplex A[], int mn) {
+	int matSize = sizeDim * sizeDim;
+	cuDoubleComplex* X = new cuDoubleComplex[matSize];
+	for (int i = 0; i < sizeDim; i++) {
+		for (int j = 0; j < sizeDim; j++) {
+			X[i * sizeDim + j].x = mn;
+			X[i * sizeDim + j].y = 0;
+			X[i * sizeDim + j] = cuCmul(A[i * sizeDim + j], X[i * sizeDim + j]);
+		}
+	}
+	return X;
+}
+
+
+void showMat(int sizeDim, cuDoubleComplex A[]) {
+	for (int i = 0; i < sizeDim; i++) {
+		for (int j = 0; j < sizeDim; j++) {
+			cout << setw(9) << A[i * sizeDim + j].x << " +" << setw(9) << A[i * sizeDim + j].y << "i   ";
+		}
+		cout << endl;
+	}
+	cout << endl;
+}
+
+int main() {
+	bool rys;
+	srand((unsigned int)time(NULL));
+	int sizeDim;
+
+	cout << "Podaj rozmiar macierzy:";
+	cin >> sizeDim;
+	while (!cin.good()) {
+		cin.clear();
+		cin.ignore(numeric_limits<streamsize>::max(), '\n');
+		cin >> sizeDim;
+	}
+
+	cout << "Rysowac macierze?(0/1):";
+	cin >> rys;
+	while (!cin.good()) {
+		cin.clear();
+		cin.ignore(numeric_limits<streamsize>::max(), '\n');
+		cin >> rys;
+	}
+
+	int w = 6;
+	int u = 0;
+	int matSize = sizeDim * sizeDim;
+	cuDoubleComplex* A = new cuDoubleComplex[matSize];
+	cuDoubleComplex* B = new cuDoubleComplex[matSize];
+	cuDoubleComplex* X = new cuDoubleComplex[matSize];
+	cuDoubleComplex* Y = new cuDoubleComplex[matSize];
+	cuDoubleComplex* Z = new cuDoubleComplex[matSize];
+
+	cuDoubleComplex* d_A;
+	cuDoubleComplex* d_B;
+	cuDoubleComplex* d_X;
+	cuDoubleComplex* d_Z;
+
+	defMat(sizeDim, A, B);
+
+	cudaMalloc(&d_A, matSize * sizeof(cuDoubleComplex));
+	cudaMalloc(&d_B, matSize * sizeof(cuDoubleComplex));
+	cudaMalloc(&d_X, matSize * sizeof(cuDoubleComplex));
+	cudaMalloc(&d_Z, matSize * sizeof(cuDoubleComplex));
+
+	cudaMemcpy(d_A, A, matSize * sizeof(cuDoubleComplex), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_B, B, matSize * sizeof(cuDoubleComplex), cudaMemcpyHostToDevice);
+
+	dim3 block_size(32, 32);
+	dim3 grid_size(int(sizeDim / block_size.x) + 1, int(sizeDim / block_size.y) + 1);
+
+	auto start = chrono::steady_clock::now();
+	mulMatGPU << <grid_size, block_size >> > (d_A, d_B, d_X, sizeDim);
+	cudaMemcpy(X, d_X, matSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+	addMatGPU << <grid_size, block_size >> > (d_A, d_X, sizeDim);
+	cudaMemcpy(X, d_X, matSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+	tranMatGPU << <grid_size, block_size >> > (d_A, d_Z, sizeDim);
+	cudaMemcpy(Z, d_Z, matSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+	mulCMatGPU << <grid_size, block_size >> > (d_Z, u, sizeDim);
+	cudaMemcpy(Z, d_Z, matSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+	addMatGPU << <grid_size, block_size >> > (d_Z, d_X, sizeDim);
+	cudaMemcpy(X, d_X, matSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+	mulCMatGPU << <grid_size, block_size >> > (d_B, w, sizeDim);
+	cudaMemcpy(Z, d_B, matSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+	subMatGPU << <grid_size, block_size >> > (d_X, d_B, sizeDim);
+	cudaMemcpy(X, d_X, matSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+
+	auto end = chrono::steady_clock::now();
+	chrono::duration<double> elapsed = end - start;
+
+	auto start2 = chrono::steady_clock::now();
+
+	Y = subMat(sizeDim, addMat(sizeDim, addMat(sizeDim, mulMat(sizeDim, A, B), mulcMat(sizeDim, tranMat(sizeDim, A), u)), A), mulcMat(sizeDim, B, w));
+
+	auto end2 = chrono::steady_clock::now();
+	chrono::duration<double> elapsed2 = end2 - start2;
+
+	if (rys) {
+		cout << "Macierz A:" << endl;
+		showMat(sizeDim, A);
+		cout << "Macierz B:" << endl;
+		showMat(sizeDim, B);
+		cout << "Macierz X GPU:" << endl;
+		showMat(sizeDim, X);
+		cout << "Macierz X CPU:" << endl;
+		showMat(sizeDim, Y);
+	}
+
+	cudaFree(d_A);
+	cudaFree(d_B);
+	cudaFree(d_X);
+	cudaFree(d_Z);
+
+	delete(A);
+	delete(B);
+	delete(X);
+	delete(Z);
+	delete(Y);
+
+	cout << "GPU Time measured:" << elapsed.count() << "s \n";
+	cout << "CPU Time measured:" << elapsed2.count() << "s \n";
+	return 0;
+}
